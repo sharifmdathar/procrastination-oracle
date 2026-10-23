@@ -1,0 +1,29 @@
+# local data (never commit a real procrastination log)
+*.db
+*.db-journal
+*.db-wal
+*.sqlite
+data/
+
+# secrets
+.env
+.env.local
+
+# model files and caches
+models/*.joblib
+models/*.pkl
+.cache/
+
+# generated
+morning_briefing.md
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+.DS_Store
+models/*.json

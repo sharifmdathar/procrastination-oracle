@@ -1,0 +1,37 @@
+[project]
+name = "procrastination-oracle"
+version = "0.1.0"
+description = "Local-first procrastination predictor: TabPFN-3.5 risk scores, an Ollama agent that intervenes, and a morning briefing."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Procrastination Oracle" }]
+dependencies = [
+    "tabpfn>=9.0.0",
+    "pandas>=2.0",
+    "scikit-learn>=1.4",
+    "ollama>=0.4",
+    "fastmcp>=2.0",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+temporal = ["temporalio>=1.7"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+py-modules = ["db", "features", "baselines", "oracle", "briefing", "mcp_server"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-q"
+asyncio_mode = "auto"
