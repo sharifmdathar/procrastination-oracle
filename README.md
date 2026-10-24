@@ -1,5 +1,7 @@
 # Procrastination Oracle
 
+**Written up for the Hacktoberfest Open-Source AI Challenge (Week 3) on DEV:** https://dev.to/md_atharsharif_29e9cf9be/i-built-an-ai-that-helps-you-procrastinate-better-and-it-runs-entirely-on-your-laptop-4686
+
 A local-first app that predicts which of your todos you will skip, then acts
 before you have to.
 
