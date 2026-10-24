@@ -38,8 +38,57 @@ LICENSE_HINT = (
 )
 
 
+LICENSE_ACCEPT_URL = "https://ux.priorlabs.ai/account/licenses"
+HF_GATED_HINT = (
+    "The TabPFN-3.5 checkpoint lives in a gated Hugging Face repo.\n"
+    "  1. Accept the terms at https://huggingface.co/Prior-Labs/tabpfn_3_5\n"
+    "  2. Create a read token at https://huggingface.co/settings/tokens\n"
+    "  3. Put HF_TOKEN=hf_... in .env and rerun."
+)
+
+
 class TabPFNUnavailable(RuntimeError):
     """Raised when TabPFN cannot be imported, licensed, or downloaded."""
+
+
+def _diagnose_download_failure() -> str:
+    """Ask the license server *why* the weights were refused.
+
+    TabPFN's own error path reports "set TABPFN_TOKEN" even when a valid token
+    is already configured, which sends people in circles. This distinguishes a
+    rejected token from an unaccepted license, and falls back to the generic
+    instructions if the server cannot be reached. Never raises: the caller is
+    already handling a failure.
+    """
+    try:
+        from tabpfn import browser_auth
+        from tabpfn.settings import settings
+    except Exception:  # pragma: no cover - depends on install
+        return LICENSE_HINT
+
+    try:
+        token = browser_auth.get_cached_token()
+        if not token:
+            return LICENSE_HINT
+        api_url = settings.tabpfn.auth_api_url
+        if browser_auth.verify_token(token, api_url) is False:
+            return (
+                "The TABPFN_TOKEN in .env was rejected by the license server.\n"
+                "  Copy the API key again from https://ux.priorlabs.ai/account\n"
+                "  (no quotes, no trailing whitespace) and rerun."
+            )
+        license_name = browser_auth._get_license_name("tabpfn_3_5")
+        accepted = browser_auth.check_license_accepted(token, api_url, license_name)
+        if accepted is False:
+            return (
+                "Your TABPFN_TOKEN is valid, but this account has not accepted\n"
+                f"the TabPFN-3.5 license ({license_name}).\n"
+                f"  Accept it once at {LICENSE_ACCEPT_URL}\n"
+                "  then rerun — the weights download on the next attempt."
+            )
+    except Exception:
+        return LICENSE_HINT
+    return LICENSE_HINT
 
 
 def default_device() -> str:
@@ -157,9 +206,12 @@ class TaskRiskOracle:
         try:
             classifier.fit(X, y_array)
         except Exception as exc:
-            message = str(exc)
-            if "license" in message.lower() or type(exc).__name__ == "TabPFNLicenseError":
-                raise TabPFNUnavailable(LICENSE_HINT) from exc
+            name = type(exc).__name__
+            message = str(exc).lower()
+            if name == "TabPFNHuggingFaceGatedRepoError" or "gated" in message:
+                raise TabPFNUnavailable(HF_GATED_HINT) from exc
+            if "license" in message or name == "TabPFNLicenseError":
+                raise TabPFNUnavailable(_diagnose_download_failure()) from exc
             raise
 
         self.classifier_ = classifier
@@ -189,33 +241,66 @@ class TaskRiskOracle:
         return (self.predict_proba(X) >= 0.5).astype(int)
 
     def save(self, path: str | Path = DEFAULT_MODEL_PATH) -> Path:
+        """Persist the fitted oracle.
+
+        TabPFN exposes ``save_fit_state``/``load_from_fit_state`` for fitted
+        estimators, so the checkpoint itself is written next to the metadata
+        file. Plain sklearn-like classifiers (used in tests) fall back to
+        joblib inside the bundle.
+        """
         if self.classifier_ is None:
             raise RuntimeError("cannot save an unfitted oracle")
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        joblib.dump(
-            {
-                "classifier": self.classifier_,
-                "feature_columns": self.feature_columns_,
-                "model_version": self.model_version,
-                "fitted_at": db.to_iso(self.fitted_at_),
-                "training_rows": self.training_rows_,
-                "device": self.device,
-            },
-            target,
-        )
+
+        bundle: dict[str, Any] = {
+            "classifier": None,
+            "classifier_state": None,
+            "feature_columns": self.feature_columns_,
+            "model_version": self.model_version,
+            "fitted_at": db.to_iso(self.fitted_at_),
+            "training_rows": self.training_rows_,
+            "device": self.device,
+        }
+        if hasattr(self.classifier_, "save_fit_state"):
+            state_path = target.parent / (target.name + ".tabpfn_fit")
+            self.classifier_.save_fit_state(state_path)
+            bundle["classifier_state"] = state_path.name
+        else:
+            bundle["classifier"] = self.classifier_
+        joblib.dump(bundle, target)
         return target
 
     @classmethod
     def load(cls, path: str | Path = DEFAULT_MODEL_PATH) -> "TaskRiskOracle":
-        bundle = joblib.load(Path(path))
+        target = Path(path)
+        bundle = joblib.load(target)
         instance = cls()
-        instance.classifier_ = bundle["classifier"]
         instance.feature_columns_ = list(bundle.get("feature_columns", []))
         instance.model_version = bundle.get("model_version", MODEL_VERSION_NAME)
         instance.training_rows_ = int(bundle.get("training_rows", 0))
         instance.fitted_at_ = db.parse_dt(bundle.get("fitted_at"))
         instance.device = bundle.get("device", default_device())
+        instance.classifier_ = bundle.get("classifier")
+
+        state_name = bundle.get("classifier_state")
+        if instance.classifier_ is None and state_name:
+            try:
+                from tabpfn import TabPFNClassifier
+            except ImportError as exc:  # pragma: no cover - depends on install
+                raise TabPFNUnavailable(
+                    "this oracle was saved by TabPFN; install tabpfn to load it"
+                ) from exc
+            state_path = target.parent / state_name
+            if not state_path.exists():
+                raise FileNotFoundError(
+                    f"missing TabPFN fit state next to {target}: {state_path}"
+                )
+            instance.classifier_ = TabPFNClassifier.load_from_fit_state(
+                state_path, device=instance.device
+            )
+        if instance.classifier_ is None:
+            raise ValueError(f"no classifier found in {target}")
         return instance
 
 

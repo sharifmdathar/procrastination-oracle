@@ -92,6 +92,20 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def parse_as_of(value: str | None) -> datetime:
+    """Parse an ISO-8601 ``as_of`` snapshot; ``None`` means now (UTC).
+
+    Pinning this timestamp makes an evaluation run reproducible: the feature
+    frame (overdue days, task age) and the label windows all hang off it.
+    """
+    if value is None:
+        return utcnow()
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
 def to_iso(value: datetime | None) -> str | None:
     if value is None:
         return None

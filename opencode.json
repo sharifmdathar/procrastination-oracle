@@ -1,0 +1,13 @@
+{
+  "mcp": {
+    "servers": {
+      "devrelay-gateway": {
+        "type": "local",
+        "command": [
+          "/home/doormat/.devrelay/bin/dev_mlh_mcp_server",
+          "--stdio"
+        ]
+      }
+    }
+  }
+}

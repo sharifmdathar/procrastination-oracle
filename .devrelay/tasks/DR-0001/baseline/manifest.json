@@ -1,0 +1,42 @@
+{
+  "manifest_version": 1,
+  "baseline_schema_version": 1,
+  "task_id": "DR-0001",
+  "preexisting_dirty_files": [
+    ".env.example",
+    ".gitignore",
+    "README.md",
+    "docs/demo.gif",
+    "pyproject.toml",
+    "scripts/generate_synthetic.py",
+    "scripts/run_nightly.py",
+    "scripts/train_and_eval.py",
+    "src/agent/llm.py",
+    "src/db.py",
+    "src/oracle.py",
+    "src/workflow/nightly.py",
+    "tests/test_oracle.py"
+  ],
+  "preexisting_untracked_files": [
+    "models/oracle_tabpfn_v3_5.joblib.tabpfn_fit",
+    "test-results/.last-run.json"
+  ],
+  "untracked_entries": [
+    {
+      "rel_path": "models/oracle_tabpfn_v3_5.joblib.tabpfn_fit",
+      "storage_name": "11c671c2bacd319a8273441130144db81849ad6f.blob",
+      "size": 29327,
+      "mode": "100644",
+      "is_symlink": false,
+      "sha256": "32dac90e557b06015dcbc3c72bc395e57e5d9e1bed0e2eaa508a482cac8422fa"
+    },
+    {
+      "rel_path": "test-results/.last-run.json",
+      "storage_name": "9db6cd4f4ed8dc64d41d8c024cf9a9473ff5fb16.blob",
+      "size": 45,
+      "mode": "100644",
+      "is_symlink": false,
+      "sha256": "e22df5d0991eb28c09093b1e678b3fa8cd1fab48185d38e67cf79fb6e63ad5ea"
+    }
+  ]
+}

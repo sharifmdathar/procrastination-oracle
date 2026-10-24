@@ -1,0 +1,68 @@
+# DevRelay workspace configuration (installed once by `devrelay init`).
+#
+# This file is runtime wiring plus optional policy overrides.  Reusable policy
+# belongs in .devrelay/profiles/<name>.yaml, selected by `profiles:` below.
+#
+# Precedence:  packaged policy defaults  <  profiles (in order)  <  the policy
+#              overrides written here
+#
+# A task freezes the resolved policy at `devrelay start`; editing this file
+# afterwards never changes a running task (an explicit, audited
+# `devrelay unblock --refresh-policy` is required).
+
+# Project profiles, applied in order (later wins).  Profile files may set
+# pipeline / budget / review policy / tests / scope / baseline - never
+# review.provider, codex.*, git.* or this selector.
+profiles: []
+
+# ---- runtime wiring (environment-specific, live, never frozen) -------------
+review:
+  # manual | openai_compatible
+  provider: manual
+
+# v0.3-A: OpenCode session bridge (disabled until base_url is set).
+# The access token, when needed, comes from DEVRELAY_OPENCODE_TOKEN and is never
+# written to this file.
+opencode:
+  base_url: ""                      # e.g. http://127.0.0.1:4096 (explicit endpoint)
+  workspace: ""                     # defaults to this repository root
+  default_session: ""
+  agent: ""
+  model: ""
+  timeout_seconds: 30
+  idle_timeout_seconds: 300
+  poll_interval_seconds: 1.0
+  max_response_bytes: 1048576
+  max_messages: 50
+  allow_unknown_workspace: false
+
+# v0.3-C: semantic role routing (optional; uncomment to enable).  A role is a
+# name DevRelay understands (implementer | reviewer); the workspace decides which
+# provider/model plays it.  Identifiers only - never prompts, credentials,
+# endpoints, retry policies, fallback models or candidate lists.  While this
+# section is absent (or a model is empty) the role-aware tools fail locally with
+# role_unconfigured and every raw v0.3-B tool keeps working unchanged.
+# roles:
+#   implementer:
+#     model: "provider/model"       # e.g. the workspace's implementer route
+#     agent: null                   # optional: accepted v0.3-A agent semantics
+#   reviewer:
+#     model: "provider/model"       # e.g. the workspace's reviewer route
+#     agent: null
+
+codex:
+  executable: codex
+  # Verified against `codex exec --help` (codex-cli 0.150.1): no --full-auto.
+  args: ["exec", "--sandbox", "workspace-write"]
+  prompt_mode: stdin
+  timeout_seconds: 1800
+
+# ---- optional policy overrides (uncomment what this workspace pins) --------
+# budget:
+#   max_reviewer_calls: 2
+#   max_total_provider_calls: 6
+# tests:
+#   targeted: ["pytest -q"]
+#   full: []
+# scope:
+#   reuse_approved_scope: true

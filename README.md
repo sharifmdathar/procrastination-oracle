@@ -13,7 +13,76 @@ Claude Desktop.
 > `source='synthetic'`, the CLI prints a warning, and the briefing carries a
 > banner. Do not mistake demo predictions for a portrait of you.
 
-![Procrastination Oracle pipeline](docs/demo.gif)
+![Procrastination Oracle nightly run](docs/demo.gif)
+
+*Real terminal capture of a nightly run (time compressed, `--as-of
+2026-10-24`); synthetic data. The numbers in it reproduce.*
+
+Reference run (reproduces exactly; resets the synthetic log to the same
+snapshot):
+
+```bash
+python scripts/generate_synthetic.py --as-of 2026-10-24T00:00:00Z
+python scripts/train_and_eval.py --as-of 2026-10-24T00:00:00Z
+```
+
+```text
+==========================================================================
+PROCRASTINATION ORACLE — model comparison
+==========================================================================
+Tasks: 398   train: 298   test: 100
+Train window: 2026-06-26 → 2026-09-25
+Test window:  2026-09-25 → 2026-10-22
+As of:        2026-10-24 00:00 UTC   (one snapshot for all rows)
+Label rate: train 0.26 / test 0.36   (split is chronological, never random)
+TabPFN input: raw DataFrame (8 columns, no scaling/encoding)
+
+Model                   Accuracy     AUC   Brier   Notes
+------------------------------------------------------------
+TabPFN-3.5                0.740   0.754   0.188   raw features, zero preprocessing
+Logistic regression       0.720   0.767   0.202   tf-idf + one-hot + scaled
+Majority class            0.640   0.500   0.241   always predicts 0 (train prevalence 0.26)
+
+Test set: 100 tasks, 36 positives (36%); chronological split, no shuffling.
+
+(Note: 398 labeled rows from the 400 synthetic tasks — 2 open tasks inside their 48h window are excluded, see Data.)
+```
+
+Seed-pinned (`--seed 7`) and snapshot-pinned: the synthetic history, feature
+frame, split, and TabPFN `random_state` all derive from that `--as-of`
+timestamp, so a rerun prints this exact table.
+
+**Reading the table**
+
+* **Accuracy** — thresholded at 0.5. Majority class is a strong baseline when
+  skips are rare; always check it.
+* **AUC** — ranking quality, independent of threshold. 0.5 is a coin flip.
+* **Brier** — mean squared error of the probabilities. Lower is better; this is
+  the calibration check that matters for a risk-tier system.
+* **The honest read** — TabPFN wins on calibration (Brier 0.188 vs 0.202)
+and accuracy (+0.020), but logistic regression edges it on AUC (0.767 vs
+0.754). With 100 test rows, one task is a percentage point. The Oracle *thresholds*
+probabilities to trigger interventions, so calibration is the metric that decides
+behavior — and TabPFN's edge there is real.
+
+### TabPFN setup
+
+TabPFN-3.5 weights are license-gated. Accept once, then run offline:
+
+1. Open <https://ux.priorlabs.ai>, log in, accept the license.
+2. Copy the API key from the account page.
+3. Put `TABPFN_TOKEN=<key>` in `.env`.
+4. Run `python scripts/train_and_eval.py` once to download and cache the weights.
+
+The key and the license acceptance are two different things: a valid key whose
+account has not accepted the TabPFN-3.5 license fails with an explicit
+"license not accepted" message pointing at
+<https://ux.priorlabs.ai/account/licenses>. If the Hugging Face repo is gated
+for your account, accept <https://huggingface.co/Prior-Labs/tabpfn_3_5> and add
+`HF_TOKEN=hf_...` as well.
+
+CI/headless is supported with the same environment variable. The token is only
+needed for the download; `run_nightly.py` afterwards works with no network.
 
 ---
 
@@ -36,15 +105,16 @@ already drafted is useful. The Oracle closes that loop:
 ```bash
 git clone <this-repo> && cd procrastination-oracle
 uv venv && source .venv/bin/activate        # Python 3.10+
-uv pip install -e ".[dev]"
 
 cp .env.example .env
 # One-time TabPFN-3.5 license acceptance:
 #   https://ux.priorlabs.ai → Licenses → copy API key → TABPFN_TOKEN=... in .env
 
 python scripts/init_db.py
-python scripts/generate_synthetic.py          # 400 clearly-labeled fake tasks
-python scripts/train_and_eval.py              # <-- the metrics table
+# Pinned snapshot so the reference table reproduces exactly; drop --as-of to
+# use today instead.
+python scripts/generate_synthetic.py --as-of 2026-10-24T00:00:00Z
+python scripts/train_and_eval.py --as-of 2026-10-24T00:00:00Z  # metrics table
 python scripts/run_nightly.py                 # writes morning_briefing.md
 ```
 
@@ -55,41 +125,29 @@ ollama serve
 ollama pull qwen3
 ```
 
+qwen3 is a reasoning model, so the client asks for `think=False` by default:
+left on, it spends the whole token budget inside ` thinking` and returns an empty
+answer for these short prompts, which silently degraded every intervention to
+the heuristic fallback. Set `OLLAMA_THINK=1` to re-enable thinking — expect
+~90s per intervention instead of ~15s, with no clear gain for this task.
+
 **Everything is offline after the first TabPFN weight download.** The fitted
-classifier is saved to `models/oracle_tabpfn_v3_5.joblib`; nightly runs load
-that file and never touch the network.
-
-### Plain pip
-
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-```
+classifier is saved to `models/oracle_tabpfn_v3_5.joblib` (TabPFN's fit state
+lands beside it as `.joblib.tabpfn`); nightly runs load those files and never
+touch the network.
 
 ---
 
 ## Architecture
 
-```
- Todoist API / synthetic generator
-              │
-              ▼
-      oracle.db (SQLite)                 task_events + interventions + runs
-              │
-              ▼
-      features.py                        raw title/category strings,
-              │                          numbers, missing values — no scaling,
-              ▼                          no one-hot, no vectorisation
-   TabPFN-3.5 classifier                 P(completed within 48h)
-              │
-              ▼
-   risk tiers: HIGH / MED / LOW
-              │
-              ▼
-   Ollama agent (qwen3)                  break into 3 / reschedule / 2-min step
-              │  (deterministic fallback if Ollama is down)
-              ▼
-   morning_briefing.md                   two lines, risk table, actions taken
+```mermaid
+graph LR
+    A["Todoist API / synthetic generator"] --> B["oracle.db (SQLite)<br/>task_events + interventions + runs"]
+    B --> C["features.py<br/>raw title/category strings,<br/>numbers, missing values — no scaling,<br/>no one-hot, no vectorisation"]
+    C --> D["TabPFN-3.5 classifier<br/>P(completed within 48h)"]
+    D --> E["risk tiers: HIGH / MED / LOW"]
+    E --> F["Ollama agent (qwen3)<br/>break into 3 / reschedule / 2-min step<br/>(deterministic fallback if Ollama is down)"]
+    F --> G["morning_briefing.md<br/>two lines, risk table, actions taken"]
 ```
 
 * **One row per task.** Features are observable at scoring time; `completed_at`
@@ -115,60 +173,6 @@ table with its source (`llm` or `fallback`).
 
 ---
 
-## The money output
-
-```bash
-python scripts/train_and_eval.py
-```
-
-```
-==========================================================================
-PROCRASTINATION ORACLE — model comparison
-==========================================================================
-Tasks: 397   train: 298   test: 99
-Train window: 2026-06-26 → 2026-09-25
-Test window:  2026-09-25 → 2026-10-21
-Label rate: train 0.26 / test 0.35   (split is chronological, never random)
-TabPFN input: raw DataFrame (8 columns, no scaling/encoding)
-
-Model                   Accuracy     AUC   Brier   Notes
-------------------------------------------------------------
-TabPFN-3.5              not run       —       —   needs TABPFN_TOKEN (one-time license)
-Logistic regression       0.667   0.764   0.200   tf-idf + one-hot + scaled
-Majority class            0.646   0.500   0.237   always predicts 0 (train prevalence 0.26)
-
-Test set: 99 tasks, 35 positives (35%); chronological split, no shuffling.
-```
-
-That block is the real baseline output from the reference run of this repo.
-It was built in a headless environment without a license token, so the TabPFN
-row is marked **not run** rather than filled with invented numbers. Once
-`TABPFN_TOKEN` is set, the same command prints the full three-way table; the
-script also writes `models/eval_metrics.json` with
-`"unavailable": ["TabPFN-3.5"]` when the weights cannot be loaded.
-
-**Reading the table**
-
-* **Accuracy** — thresholded at 0.5. Majority class is a strong baseline when
-  skips are rare; always check it.
-* **AUC** — ranking quality, independent of threshold. 0.5 is a coin flip.
-* **Brier** — mean squared error of the probabilities. Lower is better; this is
-  the calibration check that matters for a risk-tier system.
-
-### TabPFN setup
-
-TabPFN-3.5 weights are license-gated. Accept once, then run offline:
-
-1. Open <https://ux.priorlabs.ai>, log in, accept the license.
-2. Copy the API key from the account page.
-3. Put `TABPFN_TOKEN=<key>` in `.env`.
-4. Run `python scripts/train_and_eval.py` once to download and cache the weights.
-
-CI/headless is supported with the same environment variable. The token is only
-needed for the download; `run_nightly.py` afterwards works with no network.
-
----
-
 ## Data
 
 ### Synthetic generator
@@ -182,6 +186,8 @@ seed. It is deterministic and deliberately lopsided:
 * Social plans finish fast; admin and creative work rot.
 * Some tasks are still open when their 48-hour label window has not elapsed —
   those rows are excluded from training, because their label is unknowable.
+  The reference snapshot generates 400 rows; 398 have knowable labels at that
+  `as_of` (two open tasks are still inside their 48-hour window).
 
 ### Todoist
 
@@ -203,11 +209,9 @@ row is present.
 
 ### The label
 
-```
-completed_within_48h = 1  if completed_at - created_at <= 48h
+```completed_within_48h = 1  if completed_at - created_at <= 48h
                        0  if completed/deleted after that, or the window elapsed
-                       excluded while the window is still open
-```
+                       excluded while the window is still open```
 
 ---
 
@@ -254,6 +258,12 @@ Buy milk,errands,,0
 python scripts/run_nightly.py
 ```
 
+Pinned to the reference snapshot (reproduces the GIF's counts exactly):
+
+```bash
+python scripts/run_nightly.py --as-of 2026-10-24T00:00:00Z
+```
+
 This is the fallback path and the reference implementation:
 
 1. optional Todoist sync (`--sync-todoist`)
@@ -262,8 +272,8 @@ This is the fallback path and the reference implementation:
 4. persist interventions + run metadata to SQLite
 5. write `morning_briefing.md`
 
-Useful flags: `--db`, `--model`, `--out`, `--max-interventions`, `--no-llm`,
-`--no-synthetic`, `--sync-todoist`.
+Useful flags: `--db`, `--model`, `--out`, `--as-of`, `--max-interventions`,
+`--no-llm`, `--no-synthetic`, `--sync-todoist`.
 
 If Ollama is not running, the run still succeeds and the briefing labels every
 action `heuristic fallback`. It never pretends an LLM wrote the text.
@@ -273,7 +283,7 @@ action `heuristic fallback`. It never pretends an LLM wrote the text.
 ## Temporal (optional, last)
 
 ```bash
-uv pip install -e ".[temporal]"
+uv pip install -e .[temporal]
 temporal server start-dev                     # terminal 1
 
 python -m workflow.nightly --schedule         # terminal 2: worker + 21:00 cron
@@ -305,7 +315,7 @@ token/model cache; its skip message says so. Everything else runs offline.
 
 ## Project layout
 
-```
+```text
 src/
   db.py                     SQLite schema + event/intervention storage
   collectors/synthetic.py   clearly-labeled fake procrastinator
@@ -318,6 +328,7 @@ src/
   briefing.py               morning_briefing.md renderer
   mcp_server.py             FastMCP tools
   workflow/                 optional Temporal activities + nightly workflow
+
 scripts/                    init, ingest, generate, train_and_eval, run_nightly
 tests/
 ```
@@ -334,7 +345,5 @@ tests/
   about your life.
 * TabPFN-3.5 weights are non-commercial-licensed. Check the license for your use.
 * The Oracle predicts and writes; it does not modify Todoist. You stay in control.
-
----
 
 Built to be run at 9pm so that 9am has fewer decisions.

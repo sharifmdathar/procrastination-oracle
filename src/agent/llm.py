@@ -18,6 +18,13 @@ DEFAULT_HOST = "http://localhost:11434"
 _THINK_BLOCK = re.compile(r"<think(?:ing)?>.*?</think(?:ing)?>", re.DOTALL | re.IGNORECASE)
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() not in ("0", "false", "no", "off")
+
+
 class LLMUnavailable(RuntimeError):
     """Ollama is not running, the model is missing, or generation failed."""
 
@@ -41,12 +48,18 @@ class OllamaLLM:
         *,
         temperature: float = 0.2,
         timeout: float = 120.0,
+        think: bool | None = None,
     ) -> None:
         self.model = model or os.environ.get("OLLAMA_MODEL", DEFAULT_MODEL)
         self.host = host or os.environ.get("OLLAMA_HOST", DEFAULT_HOST)
         self.temperature = temperature
         self.timeout = timeout
+        # qwen3 is a reasoning model. Left on, it spends the whole token budget
+        # inside <think> and returns an empty answer for short prompts, so the
+        # agent silently falls back to heuristics. Think off unless asked for.
+        self.think = think if think is not None else _env_flag("OLLAMA_THINK", False)
         self._client: Any | None = None
+        self._supports_think = True
 
     def _get_client(self) -> Any:
         if self._client is None:
@@ -94,13 +107,22 @@ class OllamaLLM:
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "format": "json" if json_mode else None,
+            "options": {"temperature": self.temperature, "num_predict": 600},
+        }
+        if self._supports_think:
+            kwargs["think"] = self.think
         try:
-            response = client.chat(
-                model=self.model,
-                messages=messages,
-                format="json" if json_mode else None,
-                options={"temperature": self.temperature, "num_predict": 600},
-            )
+            try:
+                response = client.chat(**kwargs)
+            except TypeError:
+                # older ollama-python without the `think` kwarg
+                self._supports_think = False
+                kwargs.pop("think", None)
+                response = client.chat(**kwargs)
         except Exception as exc:
             raise LLMUnavailable(f"Ollama generation failed: {exc}") from exc
 
@@ -113,7 +135,13 @@ class OllamaLLM:
         text = str(content or "").strip()
         if not text:
             raise LLMUnavailable("Ollama returned an empty response")
-        return _THINK_BLOCK.sub("", text).strip()
+        cleaned = _THINK_BLOCK.sub("", text).strip()
+        if not cleaned:
+            raise LLMUnavailable(
+                "Ollama spent the whole response on reasoning and returned no "
+                "answer; set OLLAMA_THINK=0 or raise num_predict"
+            )
+        return cleaned
 
     def generate_json(
         self,

@@ -7,14 +7,21 @@ Run:
 If the event log is empty, a clearly-labelled synthetic user is generated
 first. The split is always chronological — the last 25% of tasks by creation
 time form the test set.
+
+Reproducible: pass ``--as-of`` with a fixed timestamp and the synthetic data,
+feature frame, split, and TabPFN seed all come out identical on a rerun.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import random
 import sys
+from datetime import datetime
 from pathlib import Path
+
+import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -42,10 +49,35 @@ def parse_args() -> argparse.Namespace:
         "--n-synthetic", type=int, default=400, help="rows if the log is empty"
     )
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument(
+        "--as-of",
+        default=None,
+        help=(
+            "ISO-8601 snapshot for labels/features, e.g. 2026-10-24T00:00:00Z "
+            "(default: now, UTC)"
+        ),
+    )
     return parser.parse_args()
 
 
-def ensure_data(db_path: Path | None, n: int, seed: int) -> tuple[list[db.TaskEvent], bool]:
+def seed_everything(seed: int) -> None:
+    """Pin the RNGs on the eval path.
+
+    TabPFN is seeded through ``random_state`` in the wrapper; the global
+    generators are pinned too so a rerun cannot wobble.
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    try:
+        import torch
+    except ImportError:  # pragma: no cover - depends on the install
+        return
+    torch.manual_seed(seed)
+
+
+def ensure_data(
+    db_path: Path | None, n: int, seed: int, end_date: datetime
+) -> tuple[list[db.TaskEvent], bool]:
     conn = db.connect(db_path)
     try:
         events = db.load_events(conn)
@@ -53,7 +85,7 @@ def ensure_data(db_path: Path | None, n: int, seed: int) -> tuple[list[db.TaskEv
             print(synthetic.SYNTHETIC_BANNER)
             print(f"Event log is empty; generating {n} synthetic tasks.\n")
             synthetic.generate_and_store(
-                db_path, n=n, seed=seed, reset=True, end_date=db.utcnow()
+                db_path, n=n, seed=seed, reset=True, end_date=end_date
             )
             events = db.load_events(conn)
         synthetic_rows = sum(1 for e in events if e.source == synthetic.SYNTHETIC_SOURCE)
@@ -64,13 +96,17 @@ def ensure_data(db_path: Path | None, n: int, seed: int) -> tuple[list[db.TaskEv
 
 def main() -> int:
     args = parse_args()
-    events, has_synthetic = ensure_data(args.db, args.n_synthetic, args.seed)
+    as_of = db.parse_as_of(args.as_of)
+    seed_everything(args.seed)
+    events, has_synthetic = ensure_data(
+        args.db, args.n_synthetic, args.seed, as_of
+    )
 
     if has_synthetic:
         print(synthetic.SYNTHETIC_BANNER)
         print("Metrics below describe a fake user, not you.\n")
 
-    frame = features.build_features(events, as_of=db.utcnow())
+    frame = features.build_features(events, as_of=as_of)
     if len(frame) < 20:
         print(f"Only {len(frame)} labelled tasks. Generate more data first.")
         return 1
@@ -96,6 +132,7 @@ def main() -> int:
         "Test window:  "
         f"{test['created_at'].min():%Y-%m-%d} → {test['created_at'].max():%Y-%m-%d}"
     )
+    print(f"As of:        {as_of:%Y-%m-%d %H:%M} UTC   (one snapshot for all rows)")
     print(
         f"Label rate: train {y_train.mean():.2f} / test {y_test.mean():.2f}   "
         f"(split is chronological, never random)"
@@ -165,7 +202,7 @@ def main() -> int:
         print(f"(could not write metrics json: {exc})")
 
     if tabpfn_result is not None:
-        _print_high_risk(model, events)
+        _print_high_risk(model, events, as_of)
 
     if missing:
         print()
@@ -174,8 +211,10 @@ def main() -> int:
     return 0
 
 
-def _print_high_risk(model: oracle.TaskRiskOracle, events: list[db.TaskEvent]) -> None:
-    scored = oracle.score_tasks(model, events)
+def _print_high_risk(
+    model: oracle.TaskRiskOracle, events: list[db.TaskEvent], as_of: datetime
+) -> None:
+    scored = oracle.score_tasks(model, events, as_of=as_of)
     if not scored:
         return
     print("Highest-risk open tasks (48h completion probability):")

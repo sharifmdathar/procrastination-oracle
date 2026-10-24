@@ -58,16 +58,13 @@ class NightlyOracleWorkflow:
         )
         result = await workflow.execute_activity(
             activities.take_interventions,
-            request,
-            prediction,
+            args=[request, prediction],
             start_to_close_timeout=timeout,
             retry_policy=retry,
         )
         briefing_result = await workflow.execute_activity(
             activities.write_briefing,
-            request,
-            prediction,
-            result,
+            args=[request, prediction, result],
             start_to_close_timeout=timeout,
             retry_policy=retry,
         )

@@ -1,0 +1,34 @@
+pipeline:
+  max_fix_iterations: 3
+  auto_fix_tests: false
+  max_same_finding_cycles: 0
+budget:
+  max_implementer_calls: 4
+  max_reviewer_calls: 4
+  max_total_provider_calls: 8
+review:
+  blocking_severities:
+  - P0
+  - P1
+  - P2
+  retries: 1
+  transport_retries: 0
+  max_response_chars: 200000
+  max_diff_bytes: 300000
+  timeout_seconds: 120.0
+tests:
+  targeted: []
+  full: []
+  full_regression: release_only
+  timeout_seconds: 900.0
+scope:
+  reuse_approved_scope: true
+  current_delta_first: true
+baseline:
+  max_untracked_file_bytes: 52428800
+git:
+  allow_commit: false
+  allow_push: false
+  allow_tag: false
+  allow_reset_hard: false
+  allow_index_mutation: false

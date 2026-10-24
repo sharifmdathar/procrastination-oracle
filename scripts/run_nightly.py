@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,10 +48,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--no-llm", action="store_true", help="use deterministic fallbacks only"
     )
+    parser.add_argument(
+        "--as-of",
+        default=None,
+        help="ISO-8601 snapshot (e.g. 2026-10-24T00:00:00Z); default now",
+    )
     return parser.parse_args()
 
 
-def _ensure_data(conn, db_path: Path | None, no_synthetic: bool) -> bool:
+def _ensure_data(
+    conn, db_path: Path | None, no_synthetic: bool, as_of: datetime
+) -> bool:
     if db.count_events(conn) > 0:
         return False
     if no_synthetic:
@@ -58,14 +66,14 @@ def _ensure_data(conn, db_path: Path | None, no_synthetic: bool) -> bool:
     print(synthetic.SYNTHETIC_BANNER)
     print("Event log is empty; generating 400 synthetic tasks for the demo.\n")
     synthetic.generate_and_store(
-        db_path, n=400, seed=7, reset=True, end_date=db.utcnow()
+        db_path, n=400, seed=7, reset=True, end_date=as_of
     )
     return True
 
 
 def main() -> int:
     args = parse_args()
-    as_of = db.utcnow()
+    as_of = db.parse_as_of(args.as_of)
     conn = db.connect(args.db)
     try:
         generated = False
@@ -90,7 +98,7 @@ def main() -> int:
                 print("No tasks available after sync; nothing to score.")
                 return 1
         else:
-            generated = _ensure_data(conn, args.db, args.no_synthetic)
+            generated = _ensure_data(conn, args.db, args.no_synthetic, as_of)
 
         events = db.load_events(conn)
         synthetic_run = generated or any(
@@ -103,7 +111,11 @@ def main() -> int:
         if not args.model.exists():
             print(f"No fitted model at {args.model}.")
             print("Train one first:  python scripts/train_and_eval.py")
-            print("(The first TabPFN run needs TABPFN_TOKEN in .env; after that it is offline.)")
+            print(
+                "(The first TabPFN run needs TABPFN_TOKEN in .env *and* the "
+                "TabPFN-3.5 license accepted at"
+            )
+            print(" https://ux.priorlabs.ai/account/licenses ; after that it is offline.)")
             return 2
 
         model = oracle.load_oracle(args.model)

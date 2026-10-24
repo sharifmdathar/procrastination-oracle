@@ -103,3 +103,4 @@ def test_tabpfn_fit_predict_roundtrip(tmp_path) -> None:
     path = model.save(tmp_path / "tabpfn.joblib")
     loaded = oracle.TaskRiskOracle.load(path)
     np.testing.assert_allclose(loaded.predict_proba(X), probabilities, rtol=1e-6)
+    # TabPFN v9 saves fit state as <name>.tabpfn_fit alongside the bundle

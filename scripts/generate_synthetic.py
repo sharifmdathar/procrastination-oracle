@@ -27,13 +27,24 @@ def main() -> int:
         action="store_true",
         help="append instead of replacing previous synthetic rows",
     )
+    parser.add_argument(
+        "--as-of",
+        default=None,
+        help="ISO-8601 end date for the fake history (default: now, UTC)",
+    )
     args = parser.parse_args()
+    as_of = db.parse_as_of(args.as_of)
 
     print(synthetic.SYNTHETIC_BANNER)
     stats = synthetic.generate_and_store(
-        args.db, n=args.n, seed=args.seed, reset=not args.keep_existing
+        args.db,
+        n=args.n,
+        seed=args.seed,
+        reset=not args.keep_existing,
+        end_date=as_of,
     )
     print(f"Wrote {stats['total']} synthetic tasks to {db.resolve_db_path(args.db)}")
+    print(f"History ends {as_of:%Y-%m-%d %H:%M} UTC")
     print(
         f"  completed within 48h: {stats['completed_within_48h']} "
         f"({stats['completion_rate_48h']:.0%})"
